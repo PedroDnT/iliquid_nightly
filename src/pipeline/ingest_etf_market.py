@@ -5,7 +5,8 @@ FETCH (src/fetchers/apify_etf_fetcher.ApifyETFFetcher)
   → STORE (pg_client.upsert_rows, idempotent on (ticker, snapshot_date)).
 
 Wired into run_daily when APIFY_TOKEN is set (self-skips when unset, and when
-Apify never returns a dataset: 403 actor-not-approved or 408/wait timeout).
+Apify never returns a dataset: 403 actor-not-approved, 408/wait timeout, or
+platform ABORTED).
 See docs/ETF_AND_PERFORMANCE.md.
 Run manually:  APIFY_TOKEN=… python -m src.pipeline.ingest_etf_market
 

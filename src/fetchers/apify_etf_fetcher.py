@@ -25,6 +25,13 @@ landed, and exited 1 — which skipped ANALYZE and the analytical layer. A 408
 or a wait-budget miss is ``ApifyRunTimeoutError`` (same skip class): we never
 got a dataset, so there is nothing to fabricate.
 
+Daily CVM Ingest #219 (run 34015471961, 2026-09-06) then failed the same way
+on a platform ``ABORTED`` status after ~11 minutes (run ``d2UCTxohVY9IcQX9a``).
+CVM/BACEN/ANBIMA/B3 had already upserted ~3.6M rows. ``ABORTED`` / ``ABORTING``
+are ``ApifyRunAbortedError`` (same skip class): the actor was killed before
+delivering a dataset. An actor that ran and ended ``FAILED``, or that returned
+an empty dataset, still raises a hard ``RuntimeError``.
+
 Public surface
 --------------
     ApifyETFFetcher().fetch(tickers) -> list[dict]   # one scraped record per ticker
@@ -40,10 +47,11 @@ Configuration (env)
     APIFY_PROXY_GROUPS       optional — comma list (default 'RESIDENTIAL').
     APIFY_ETF_TIMEOUT_SECS   optional — wait budget for the actor run (default 2400).
 
-Data-integrity: a failed run (non-2xx, actor FAILED/ABORTED, or empty dataset)
+Data-integrity: a failed run (non-2xx, actor FAILED, or empty dataset)
 RAISES — it never returns a plausible-looking empty/fallback result. Timeouts
-raise ``ApifyRunTimeoutError`` (no rows). Parsing/validation and the DB upsert
-live in src/pipeline/ingest_etf_market.py.
+raise ``ApifyRunTimeoutError`` (no rows). Platform abort (``ABORTED`` /
+``ABORTING``) raises ``ApifyRunAbortedError`` (no rows). Parsing/validation
+and the DB upsert live in src/pipeline/ingest_etf_market.py.
 """
 
 from __future__ import annotations
@@ -102,6 +110,17 @@ class ApifyRunTimeoutError(ApifyScrapeUnavailableError):
     Daily CVM Ingest 33721538761 hit HTTP 408 run-timeout-exceeded on the
     300s sync endpoint after ~187 playwright pages; skipping this (like an
     unset token) is what lets ANALYZE + analytical still run.
+    """
+
+
+class ApifyRunAbortedError(ApifyScrapeUnavailableError):
+    """The actor run was aborted on Apify's side before delivering a dataset.
+
+    Distinct from a scrape that returned bad data: we never got a dataset.
+    Daily CVM Ingest #219 (run 34015471961, 2026-09-06) ingested ~3.6M
+    CVM/BACEN/B3 rows then exited 1 on ``ended ABORTED`` after ~11 minutes
+    (run d2UCTxohVY9IcQX9a), which skipped ANALYZE and the analytical layer.
+    Same skip class as an unset token, a 403, or a timeout.
     """
 
 
@@ -171,7 +190,9 @@ class ApifyETFFetcher:
         Starts the actor asynchronously, then polls until it finishes or the
         wait budget elapses. Raises on any transport error, non-2xx status,
         a non-SUCCEEDED terminal status, or an empty dataset — a failed scrape
-        must surface, never masquerade as "no ETFs".
+        must surface, never masquerade as "no ETFs". Timeout and abort are
+        ``ApifyScrapeUnavailableError`` subclasses (no dataset); ``FAILED``
+        and empty datasets stay hard ``RuntimeError``.
         """
         run_input = self._build_input(tickers)
         run = self._start_run(run_input)
@@ -188,6 +209,11 @@ class ApifyETFFetcher:
             raise ApifyRunTimeoutError(
                 f"Apify actor {self._actor} run {run_id} timed out on Apify's side "
                 f"(status={status})"
+            )
+        if status == "ABORTED" or status == "ABORTING":
+            raise ApifyRunAbortedError(
+                f"Apify actor {self._actor} run {run_id} was aborted "
+                f"(status={status}) — no dataset"
             )
         if status != "SUCCEEDED":
             raise RuntimeError(

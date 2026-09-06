@@ -179,6 +179,35 @@ async def test_etf_run_timeout_is_not_a_failure(monkeypatch, caplog):
 
 
 @pytest.mark.asyncio
+async def test_etf_run_aborted_is_not_a_failure(monkeypatch, caplog):
+    """Apify ABORTED never delivered a dataset.
+
+    Daily CVM Ingest #219 (run 34015471961, 2026-09-06) ingested ~3.6M
+    CVM/BACEN/B3 rows then exited 1 on ended ABORTED after ~11 minutes
+    (run d2UCTxohVY9IcQX9a), which skipped ANALYZE and the analytical
+    layer. Same class as an unset APIFY_TOKEN: skip, do not fail the
+    daily run.
+    """
+    from src.fetchers.apify_etf_fetcher import ApifyRunAbortedError
+
+    monkeypatch.setenv("APIFY_TOKEN", "tok")
+    p1, p2, p3, p4, *_ = _patches()
+    with p1, p2, p3, p4, \
+         patch(
+             "src.pipeline.ingest_etf_market.ingest_etf_market",
+             side_effect=ApifyRunAbortedError(
+                 "Apify actor apify~playwright-scraper run "
+                 "d2UCTxohVY9IcQX9a was aborted (status=ABORTED) — no dataset"
+             ),
+         ), \
+         patch("src.store.pg_client.get_pg_client", return_value=MagicMock()), \
+         caplog.at_level("ERROR"):
+        await rd.main()  # no SystemExit
+    assert "did not return a dataset" in caplog.text
+    assert "ABORTED" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_b3_failure_exits_nonzero(monkeypatch):
     monkeypatch.delenv("APIFY_TOKEN", raising=False)
     p1, p2, p3, p4, *_ = _patches(b3=RuntimeError("cotahist 500"))

@@ -1,4 +1,4 @@
-"""Apify ETF fetcher: async run + HTTP 403/408 mapping.
+"""Apify ETF fetcher: async run + HTTP 403/408 mapping + ABORTED skip.
 
 Daily CVM Ingest #209 (2026-09-02) failed Run daily update solely because
 apify/web-scraper started requiring a Console permission grant
@@ -9,6 +9,10 @@ Daily CVM Ingest 33721538761 (2026-09-03) failed the same step on HTTP 408
 run-timeout-exceeded: run-sync-get-dataset-items hard-caps at 300s, and ~187
 playwright pages take longer. The fetcher must start the actor asynchronously
 and treat a timeout as the same skip class as the 403.
+
+Daily CVM Ingest #219 (run 34015471961, 2026-09-06) failed the same step on
+a platform ABORTED status after ~11 minutes with no dataset. That is the
+same skip class — not a scrape that returned bad data.
 """
 
 import json
@@ -21,6 +25,7 @@ import pytest
 
 from src.fetchers.apify_etf_fetcher import (
     ApifyActorNotApprovedError,
+    ApifyRunAbortedError,
     ApifyRunTimeoutError,
     ApifyScrapeUnavailableError,
     ApifyETFFetcher,
@@ -209,6 +214,43 @@ class TestFetch:
             with pytest.raises(RuntimeError, match="ended FAILED") as exc:
                 _fetcher().fetch(["BOVA11"])
         assert type(exc.value) is RuntimeError
+        assert not isinstance(exc.value, ApifyScrapeUnavailableError)
+
+    def test_aborted_run_is_scrape_unavailable(self):
+        """Daily CVM Ingest #219 (run 34015471961): Apify ended ABORTED
+        after ~11 min with no dataset. Same skip class as 403/408.
+        """
+        urlopen = _urlopen_script([
+            ("POST", "/acts/apify~playwright-scraper/runs", {
+                "data": {"id": "d2UCTxohVY9IcQX9a", "status": "READY"}
+            }),
+            ("GET", "/actor-runs/d2UCTxohVY9IcQX9a", {
+                "data": {
+                    "id": "d2UCTxohVY9IcQX9a",
+                    "status": "ABORTED",
+                    "defaultDatasetId": "ds1",
+                }
+            }),
+        ])
+        with patch("urllib.request.urlopen", side_effect=urlopen):
+            with pytest.raises(ApifyRunAbortedError, match="status=ABORTED") as exc:
+                _fetcher().fetch(["BOVA11"])
+        assert isinstance(exc.value, ApifyScrapeUnavailableError)
+        assert "d2UCTxohVY9IcQX9a" in str(exc.value)
+
+    def test_aborting_run_is_scrape_unavailable(self):
+        urlopen = _urlopen_script([
+            ("POST", "/acts/apify~playwright-scraper/runs", {
+                "data": {"id": "run1", "status": "RUNNING"}
+            }),
+            ("GET", "/actor-runs/run1", {
+                "data": {"id": "run1", "status": "ABORTING"}
+            }),
+        ])
+        with patch("urllib.request.urlopen", side_effect=urlopen):
+            with pytest.raises(ApifyRunAbortedError, match="status=ABORTING") as exc:
+                _fetcher().fetch(["BOVA11"])
+        assert isinstance(exc.value, ApifyScrapeUnavailableError)
 
     def test_wait_budget_miss_aborts_and_raises_timeout(self):
         calls = []
