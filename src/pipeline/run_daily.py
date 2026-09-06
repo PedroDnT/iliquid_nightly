@@ -111,9 +111,10 @@ async def main() -> None:
     # limited, so it ONLY runs when APIFY_TOKEN is configured — an absent token
     # skips it and never fails the daily run. ApifyScrapeUnavailableError is the
     # same class (403 actor-not-approved, 408 run-timeout-exceeded, wait-budget
-    # miss): we never got a dataset, so there is nothing to fabricate. A scrape
-    # that ran and returned bad/empty data still fails the daily run. One
-    # snapshot per ticker per UTC day; idempotent upsert on (ticker, snapshot_date).
+    # miss, platform ABORTED): we never got a dataset, so there is nothing to
+    # fabricate. A scrape that ran and returned bad/empty data still fails the
+    # daily run. One snapshot per ticker per UTC day; idempotent upsert on
+    # (ticker, snapshot_date).
     if os.getenv("APIFY_TOKEN"):
         try:
             from src.pipeline.ingest_etf_market import ingest_etf_market
@@ -127,7 +128,8 @@ async def main() -> None:
                 # continue so CVM/BACEN/B3 success still refreshes analytical.
                 # Daily CVM Ingest #209 (2026-09-02) exited 1 on 403; run
                 # 33721538761 (2026-09-03) did the same on 408 after 3.1M CVM
-                # rows — both skipped ANALYZE and the analytical layer.
+                # rows; #219 (run 34015471961, 2026-09-06) did the same on
+                # ABORTED after 3.6M rows — all skipped ANALYZE and analytical.
                 logger.error(
                     "ETF market scrape skipped — Apify did not return a dataset: %s",
                     exc,
